@@ -7,7 +7,7 @@
 以下のリンク先に設置しています:
 
 - [スライド版](https://kazutan.github.io/TokyoR61/intoTheRmarkdown_s.html)
-- [ドキュメント版](https://kazutan.github.io/TokyoR61/intoTheRmarkdown_s.html)
+- [ドキュメント版](https://kazutan.github.io/TokyoR61/intoTheRmarkdown_d.html)
 
 ## LICENCE
 
