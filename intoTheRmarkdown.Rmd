@@ -1,0 +1,745 @@
+---
+title: "R Markdownの内部と<br/>テンプレート開発"
+subtitle: "Tokyo.R #61"
+author: "kazutan"
+date: 
+output:
+  revealjs::revealjs_presentation:
+    pandoc_args: [
+      '--from', 'markdown+autolink_bare_uris+tex_math_single_backslash-implicit_figures'
+    ]
+    theme: sky
+    center: true
+    css: for-revealjs.css
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+# はじめに
+
+## 自己紹介
+
+<div class="column1">
+- 前田 和寛
+- 比治山大学短期大学部
+- @kazutan  
+(Twitter, GitHub, Qiita)
+- http://kz-md.net/
+- http://blog.kz-md.net/
+</div>
+<div class="column2">
+![icon](pics/user.png)
+</div>
+
+## 今回のお話
+
+- R Markdownがやってること
+    - 処理の手順
+    - 各処理の役割
+    - 出力形式とテンプレート
+- Rmdテンプレート開発
+    - 基本編
+    - アレ編
+
+## 免責事項
+
+- マニアックです
+    - 今回話す内容は(多分)ほぼドキュメント化されてない内容
+    - こんな世界なんだと思ってくれれば結構です．
+- 応用場面は以下の2つしか浮かびません
+    - Rmd周りでトラブルが発生して，かつ自力でどうにかしたい
+    - 自分で自由にテンプレートを開発したいぜ!!!
+- 必要知識が多めです
+    - R, Rmdの知識とhtmlの知識は必須
+    - Pandocの仕組みとテンプレートについての理解
+- ならなぜ取り上げた?
+    - ガイアが俺に囁いたから
+
+# R Markdownがやっていること
+
+## R Markdownとは
+
+- Rの環境上でドキュメントを生成する**システム**
+- Rコードの実行とその出力を含めてドキュメント化
+    - 分析に再現性のあるドキュメントを生成
+    - 多様な出力に対応
+    - インタラクティブなPlotにも対応 etc...
+- 基本はMarkdownドキュメント
+    - 冒頭にyamlフロントマター
+    - Rチャンクでコードを埋め込む
+- 導入については以下を参照
+    - [R Markdown入門 - Kazutan.R](https://kazutan.github.io/kazutanR/Rmd_intro.html)
+
+## R Markdownの仕組み(基本)
+
+- - 以下の2ステップでドキュメントなどを生成します
+    - Rmdファイル内のRコードを評価
+    - Rコードの出力をMarkdownに起こす
+    - 出来上がったMarkdownファイルを変換
+        - Pandocというソフトウェアを利用
+        - RStudioに標準で組み込まれています
+
+```{dot, echo=FALSE}
+digraph knit {
+  graph [
+    label = "R Markdownの大まかな流れ",
+    rankdir = LR,
+    layout = dot,
+    dpi = 450, 
+  ]
+  
+  node [
+    style = "solid, filled",
+    fillcolor = Purple1,
+    label = ".Rmd"
+  ]
+  A;
+  
+  node [
+    style = "solid, filled",
+    fillcolor = Violet,
+    label = ".md",
+  ]
+  B;
+  
+  node [
+    style = "solid, filled",
+    fillcolor = LightBlue,
+  ]
+  C [label = "html, docs, pdf..."];
+
+  A -> B [label = "knit"]
+  B -> C [label = "Pandoc"]
+  
+}
+```
+
+## これで済むはずがない
+
+- ユーザーとして利用していくならこの図でOKだけど...
+    - あれだけ多様なことをこなしている
+    - どうやって細かい設定を反映させてるの?
+    - そもそも，中身どうなってんの?
+
+というわけで，もうちょっと覗き込みます
+
+## R Markdownの処理フロー
+
+renderは，だいたいこういう処理をしています:
+
+1. 前処理
+1. pre-knit処理
+1. **knit**
+1. post-knit処理
+1. 中間処理
+1. pre-processor
+1. **pandoc**
+1. post-processor
+1. 後処理
+
+## 基本的な考え方
+
+- **knit**と**pandoc**の前後にそれぞれ処理が入る
+- エラーチェックとか後片付けとか引き渡しとかもある
+- `output_format`を参照し，その度にすべき処理内容を持ってくる
+    - `output_format`については後述
+
+なお，runtime(shinyまわり)や細かいところについては省略します
+
+# 各処理の役割
+
+## 前処理
+
+- 実行環境のチェックとセットアップ
+    - pandoc使うなら，それが使えるか
+    - 中間生成物(intermediates)のチェック・準備
+    - 出力先のチェック・準備 etc...
+- inputのチェックと前処理
+    - knitが必要か(r, rmd, rmarkdownがあるか)
+    - パスに問題のある記号があるかどううか
+- .rファイルをspinするための準備
+    - `knitr::spin()`で*.rファイルを処理
+    - yamlを仕込んでRmdファイル生成
+
+---
+
+- ファイル読み込み
+    - inputをreadLine
+    - yamlフロントマターを読み込んでyaml_front_matter
+        - `rmarkdown::yaml_front_matter`を利用
+        - [Rmdファイルのyamlフロントマターの内容を取得 - Qiita](http://qiita.com/kazutan/items/12fdbb8c5b0eae07872d) を参照
+- output_formatのチェック
+    - renderの引数にoutput_formatが指定されてないならyamlから持ってくる
+- 最終的な出力先の準備
+    - output_dirやfile，およびパスの準備
+- post-knitの準備
+    - `output_format`にあるpost-knitを読み込んで準備
+
+## pre-knit
+
+- knitのoptionsとhooksを別途格納して設定されてたのをrestore
+- knitのchunk optionsをセット
+- knitのknit optionsをセット
+- knitのrootディレクトリやfigure, cacheパスをセット
+- ユーザー設定のknitのoptionsやhooksとmerge
+- paramsまわりの設定(この機能は以下の記事を参照)
+    - [Parameterized Reports](http://rmarkdown.rstudio.com/developer_parameterized_reports.html)
+- yaml_front_matterの内容を**metadata**としてknitのenvへ格納
+    - 以降，設定指示した内容はこちらを参照するようになる
+
+## knit
+
+`knitr::knit()`
+
+## post-knit
+
+- post-knitで準備していた内容を呼び出す
+- knit_metaに格納されたwarningを引っ張ってきて提示
+    - knit中のエラーはこのタイミングで出てくる
+
+## 中間処理
+
+- html dependenciesのチェック
+    - html形式以外の出力形式で，html用のものを使ってないかチェック
+    - もし使っていたら警告とともにstpo
+- knitした生成物をpandoc用の別ファイルへ書き出し
+    - このときにencodingをutf_8に変換してる
+
+## pre_prossessor
+
+- pre-processorを取得
+    - `output_format`よりpre_processorをextra_argsへ取り出す
+    - このextra_argsを，pandocのargsへ統合する
+- bibtex関連の処理
+    - 出力形式がpdf|texかをチェック(違ったら叱る)
+    - OKならpandoc$argsに組み込む
+
+## pandoc
+
+- ここまで`output_format$pandoc`に統合してきた内容を利用してconvert
+    - pandocに送る**呪文**をここで詠唱
+
+## post-prossessor
+
+- 出力されてきたファイルに対し，post_processorを実行
+    - `output_format`に格納されているpost_processorを呼び出す
+    - output_fileに対して処理
+- 無事終われば，`output created`となる
+
+## 後処理
+
+- keep_mdの処理
+    - pandocにコンバートする前のファイル(imput_file)を利用
+    - md用にyaml部分を調整し，出力ファイルと同じ場所に書き出し
+
+## ようするに，何やってんの?
+
+1. 前処理
+2. knitのための設定などを読み込む
+3. 「knit!」と唱える
+4. knitの後始末
+5. pandocへのargsを準備
+6. 「pandoc!」と唱える
+7. pandoc後の処理
+
+...です
+
+## んで，ポイントは?
+
+1. renderはいろいろなんかやってる
+1. **pre_knit**, **post_knit**, **pre_processor**, **post_processor**という処理が(実は)ある
+1. `output_format`を常に参照してる
+
+この3つをおさえておけば(今日の話は)OKです
+
+# 出力とテンプレート
+
+## 処理をテンプレートに集約
+
+- renderはたくさんの処理をこなしている
+    - ほしいもの，やってほしいことが多様
+- それにあわせて，前の内容を作り変える必要
+    - knit周りの設定
+    - pandocへ送る呪文の設定
+    - pandoc後の後始末 etc...
+- これを毎度設定して準備するのは大変
+    - ある程度テンプレートで提供する必要あり
+
+## output_format
+
+- rmarkdownのコアとなるもの(と私はかんがえてます)
+- renderで処理してほしい内容を集約
+    - renderは各処理でその都度これを参照
+- **このoutput_formatを自分のやりたいように作ることができればOK**
+
+## outuput_formatの構造
+
+主なものは以下の通りです:
+
+- knitr, pandoc
+    - knitrやpandocに与えるoptionsやargsなどのlist
+- pre_knit, post_knit
+    - knit前後に処理する内容をそれぞれ関数にまとめたもの
+- pre_processor, post_processor
+    - pandoc前後に処理する内容をそれぞれ関数にまとめたもの
+- base_format
+    - **ベースにするフォーマットの関数**
+    - 具体的には`html_document`など
+    - 参照しない時は`NULL`
+
+## output_formatを構築するには {#aaa}
+
+- 普通に考えれば，以下の手順
+    - それぞれの内容を記述
+    - それをlistにする
+- それって面倒なのには変わりないのでは?
+    - はい
+    - なので，出力形式ごとでテンプレートを準備します
+
+## 出力形式テンプレート
+
+- 特定の出力形式向けのテンプレートを提供する関数
+    - 設定項目を引数で受け取る
+    - その内容に基づき，`output_format`を出力
+- ユーザーが基本触れるのはこれらです
+    - `html_document`
+    - `pdf_document`
+    - `revealjs::revealjs_presentation` etc...
+
+## 具体例 html_document
+
+### pre_knit
+
+Rmdのソースコード埋め込み用処理の関数
+
+    source_code <- NULL
+    source_file <- NULL
+    pre_knit <- function(input, ...) {
+      if (code_download) {
+        source_file <<- basename(input)
+        source_code <<- paste0(
+          '<div id="rmd-source-code">',
+          base64enc::base64encode(input),
+          '</div>')
+      }
+    }
+
+---
+
+### post_knit
+
+- ナビゲーションバー(navbar)を設置する処理
+    - 本来ならpre_processorに組み込みたかった
+    - でも名前がぶつかるなどの都合でこっちに入れたみたい
+
+```r
+post_knit <- function(metadata, input_file, runtime, encoding, ...) {
+  # extra args
+  args <- c()
+  # navbar (requires theme)
+  if (!is.null(theme)) {
+    # add navbar to includes if necessary
+    navbar <- file.path(normalize_path(dirname(input_file)), "_navbar.html")
+    # if there is no _navbar.html look for a _navbar.yml
+    if (!file.exists(navbar)) {
+      navbar_yaml <- file.path(dirname(navbar), "_navbar.yml")
+      if (file.exists(navbar_yaml))
+        navbar <- navbar_html_from_yaml(navbar_yaml)
+      # if there is no _navbar.yml then look in site config (if we have it)
+      config <- site_config(input_file, encoding)
+      if (!is.null(config) && !is.null(config$navbar))
+        navbar <- navbar_html(config$navbar)
+    }
+    (以下略)
+```
+
+---
+
+### pre_processor
+
+コード埋め込みとDLまわりの処理(っぽい)など
+
+```r
+pre_processor <- function(metadata, input_file, runtime, knit_meta, files_dir,
+                          output_dir) {
+(中略)
+  # code_folding
+  if (code_folding %in% c("show", "hide")) {
+    # must have a theme
+    if (is.null(theme))
+      stop("You must use a theme when specifying the 'code_folding' option")
+    args <- c(args, pandoc_variable_arg("code_folding", code_folding))
+    code_menu <- TRUE
+  }
+
+  # source_embed
+  if (code_download) {
+    if (is.null(theme))
+      stop("You must use a theme when specifying the 'code_download' option")
+    args <- c(args, pandoc_variable_arg("source_embed", source_file))
+    sourceCodeFile <- tempfile(fileext = ".html")
+    writeLines(source_code, sourceCodeFile)
+    args <- c(args, pandoc_include_args(after_body = sourceCodeFile))
+    code_menu <- TRUE
+  }
+  (以下略)
+```
+
+---
+
+### その他
+
+Pandocで使用するhtmlテンプレファイルへのパスを設定
+
+```
+# template path and assets
+if (identical(template, "default"))
+  args <- c(args, "--template",
+            pandoc_path_arg(rmarkdown_system_file("rmd/h/default.html")))
+else if (!is.null(template))
+  args <- c(args, "--template", pandoc_path_arg(template))
+```
+
+引数で取得した内容をpandocのargsへひたすら追加(以下は一部抜粋)
+
+```
+# additional css
+for (css_file in css)
+  args <- c(args, "--css", pandoc_path_arg(css_file))
+```
+
+---
+
+### output_formatを構築
+
+```r
+# return format
+output_format(
+  knitr = knitr_options_html(fig_width, fig_height, fig_retina, keep_md, dev),
+  pandoc = pandoc_options(to = "html",
+                          from = from_rmarkdown(fig_caption, md_extensions),
+                          args = args),
+  keep_md = keep_md,
+  clean_supporting = self_contained,
+  df_print = df_print,
+  pre_knit = pre_knit,
+  post_knit = post_knit,
+  pre_processor = pre_processor,
+  on_exit = on_exit,
+  base_format = html_document_base(smart = smart, theme = theme,
+                                   self_contained = self_contained,
+                                   lib_dir = lib_dir, mathjax = mathjax,
+                                   template = template,
+                                   pandoc_args = pandoc_args,
+                                   extra_dependencies = extra_dependencies,
+                                   ...)
+)
+```
+
+## output_formatのbase_formatについて
+
+- 出力形式のテンプレートでベースになるものを指定
+    - 全部指定して構築するのはかなりだるい
+    - 近いものを流用し，それを修正していくほうが楽
+- ファイル形式がhtmlの場合，`html_document`などを流用すると楽
+    - もし出来る限りシンプルなものを使いたいなら，`html_document_base`が便利
+
+
+# テンプレート開発
+
+## オリジナルのテンプレートを作るには
+
+- 結局は`output_format`を自分好みにアレンジできればOK
+    - 新たにoutput_formatを構築するような関数を準備
+    - そこに処理内容を記述
+    - ただし，結局これはパッケージを準備することに
+        - パッケージ化しなくてもできるけどかなり面倒
+- 必要に応じてPandoc用テンプレートを準備
+    - 以下のような場合には必要になります
+        - デフォルトのドキュメントを弄りたい(自作したい)
+        - 自分でオプションを準備したい
+
+## でもよく考えよう
+
+- そもそもそのテンプレは必要ですか?
+    - 大抵の場合，以下の要素を設定したりでOK
+        - `includes`で追加
+        - `css`を指定
+        - `pandoc_args`で調整
+    - これらで対応できない場合に着手しましょう
+        - でないと正直なところ割に合わない
+
+## 基本編
+
+以下の公式ドキュメントを参照してください: 
+[Document Templates - R Markdown](http://rmarkdown.rstudio.com/developer_document_templates.html)
+
+例えば，こんな感じです:
+
+```r
+quarterly_report <- function(toc = TRUE) {
+
+  # get the locations of resource files located within the package
+  css <- system.file("reports/styles.css", package = "mypackage")
+  header <- system.file("reports/quarterly/header.html", package = "mypackage")
+
+  # call the base html_document function
+  rmarkdown::html_document(toc = toc,
+                           fig_width = 6.5,
+                           fig_height = 4,
+                           theme = NULL,
+                           css = css,
+                           includes = includes(before_body = header))
+}
+```
+
+## アレ編
+
+フルカスタマイズする場合です．以下の手順となります:
+
+1. packageを準備
+1. 出力用テンプレートを準備
+1. 依存ライブラリ(jsライブラリなど)を準備
+1. output_format生成用の関数を準備
+
+## 出力用テンプレートの準備
+
+### テンプレ置き場の準備
+
+以下のディレクトリを設置
+
+```
+inst/rmarkdown/templates/(出力形式の関数名)/
+```
+
+例えば，`fullpagejs;;fullpagejs_slide`の場合，
+
+```
+inst/rmarkdown/templetes/fullpagejs_slide/
+```
+
+---
+
+### Templete情報のyamlを設置
+
+以下の場所に`templete.yaml` を準備:
+
+```
+inst/rmarkdown/templetes/fullpagejs_slide/templete.yaml
+```
+
+例えば，こんな内容です:
+
+```
+name: fullPage.js slide (HTML)
+description: >
+  HTML slide based on fullPage.js.
+create_dir: false
+```
+
+---
+
+### skeleton(骨)を準備
+
+以下の場所に`skeleton.Rmd`を設置
+
+```
+inst/rmarkdown/templetes/fullpagejs_slide/skeleton/skeleton.Rmd
+```
+
+これは，新規Rmd作成でTempleteから生成する際に持ってきます．例えばこんな感じです:
+
+    ---
+    title: "Untitled"
+    output: fullpagejs::fullpagejs_slide
+    ---
+    
+    # hogehoge
+    hogehogehoge.
+    
+    # R chunk test
+    output test.
+
+---
+
+### Pandoc用テンプレートを準備
+
+例えば`default.html`というファイル名にしたければ，以下のように設置:
+
+```
+inst/rmarkdown/templetes/fullpagejs_slide/resources/default.html
+```
+
+このファイル内容については，pandocのテンプレートに対する知識が必要です．たとえばこんな感じです:
+
+```
+<!DOCTYPE html>
+<html$if(lang)$ lang="$lang$"$endif$$if(dir)$ dir="$dir$"$endif$>
+<head>
+  <title>$if(title-prefix)$$title-prefix$ – $endif$$pagetitle$</title>
+  <meta charset="utf-8">
+  <meta http-equiv="x-ua-compatible" content="ie=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" type="text/css" href="$fullpagejs-path$/jquery.fullPage.css" />
+(以下略)
+```
+
+## 依存ライブラリなど
+
+- `inst/`以下に設置していきます
+    - 例えばfullpage.jsというjsライブラリを利用したい場合:
+    ```
+    inst/fullPage.js-2.9.4/(ライブラリの中身)
+    ```
+    - これを呼び出すときは，pandocにこんな感じで書き込む;
+    ```
+    <script type="text/javascript" src="$fullpagejs-path$/jquery.fullPage.js"></script>
+    ```
+    - んでpre_processorにこんな感じで:
+    ```
+    # fullpage.js
+    fullpagejs_path <- system.file("fullPage.js-2.9.4", package = "fullpagejs")
+    if (!self_contained || identical(.Platform$OS.type, "windows"))
+      fullpagejs_path <- relative_to(
+        output_dir, render_supporting_files(fullpagejs_path, lib_dir))
+    else
+      fullpagejs_path <- pandoc_path_arg(fullpagejs_path)
+    args <- c(args, "--variable", paste0("fullpagejs-path=", fullpagejs_path))    
+    ```
+
+## output_format生成用の関数を準備 {#bbb}
+
+他のRパッケージ同様，`R/`ディレクトリ内に関数を記述したRスクリプトファイルを設置してください
+
+## buildしてtest
+
+それぞれで確認してください．
+
+以上です．
+
+
+# さいごに
+
+## 今回のまとめ
+
+R Markdownのベースはこんな感じ:
+
+
+```{r, echo=FALSE}
+library(DiagrammeR)
+grViz(height = 500, diagram = '
+digraph knit {
+  graph [
+    label = "R Markdownの流れ",
+    rankdir = LR,
+    layout = dot,
+    compound = true
+  ]
+
+  subgraph cluster_0 {
+  label = "<Pandoc系>"
+  B2 [
+    style = "solid, filled",
+    fillcolor = Violet,
+    label = ".md",
+  ];
+  C [
+    style = "solid, filled",
+    fillcolor = LightBlue,
+    label = "html, docs, \npdf..."
+  ];
+  
+  E2 [
+    style = "solid, filled",
+    fillcolor = DarkGreen,
+    label = "output_format"
+  ];
+
+  F4 [label = "pre_processor"];
+  F5 [label = "Pandoc"];
+  F6 [label = "post_processor"];
+
+  B2 -> F4
+  F4 -> F5
+  F5 -> F6
+  F6 -> C
+
+  E2 -> {F4;F6};
+{rank = same; E2;F4}
+  };
+
+  subgraph cluster_1 {
+  label = "<knit系>"
+  A [
+    style = "solid, filled",
+    fillcolor = Purple1,
+    label = ".Rmd"
+  ];
+  B [
+    style = "solid, filled",
+    fillcolor = Violet,
+    label = ".md",
+  ];
+  D [
+    style = "solid, filled",
+    fillcolor = Blue,
+    label = "フォーマット\nテンプレ"
+  ];
+  
+  E [
+    style = "solid, filled",
+    fillcolor = DarkGreen,
+    label = "output_format"
+  ];
+
+  F1 [label = "pre_knit"];
+  F2 [label = "knit"];
+  F3 [label = "post_knit"];
+
+  A -> F1
+  F1 -> F2
+  F2 -> F3
+  F3 -> B
+
+  A -> D
+  D -> E
+  E -> {F1;F3;};
+
+{rank = same; A;D}
+{rank = same; E;F1}
+};
+}
+')
+```
+
+## 参考資料
+
+- [Advanced R Markdown -Behind the Knit Button- ](https://slides.yihui.name/2017-rstudio-conf-rmarkdown-Yihui-Xie.html#1)
+    - yihuiがRStudio Conf.で話した内容
+- [rstudio/rmarkdown: Dynamic Documents for R](https://github.com/rstudio/rmarkdown)
+    - rmarkdownパッケージのGitHubリポジトリ
+    - ここのコードを読むのが一番早い
+- [Document Templates](http://rmarkdown.rstudio.com/developer_document_templates.html)
+    - rarkdownn公式．テンプレ開発基礎編．
+- [Creating New Formats](http://rmarkdown.rstudio.com/developer_custom_formats.html)
+    - rmarkdown公式．テンプレ開発基礎~応用編．
+
+## ちなみに
+
+こないだ，R Markdownの新しいテンプレ作りました:
+
+**[kazutan/fullpagejs](https://github.com/kazutan/fullpagejs)**
+
+解説用スライドは以下:
+
+**[fullpagejsというパッケージを作った](http://kz-md.net/stat/tmp_box/fullpagejs_intro.html)**
+
+まだ作ったばかりなので改良したいのですが，時間がなくて...
+**だれか一緒に作りませんか?**
+
+## Enjoy!
+
+
