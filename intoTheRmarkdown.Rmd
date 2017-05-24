@@ -18,21 +18,21 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```
 
-# はじめに
+<!-- # はじめに -->
 
-## 自己紹介
+<!-- ## 自己紹介 -->
 
-<div class="column1">
-- 前田 和寛
-- 比治山大学短期大学部
-- @kazutan  
-(Twitter, GitHub, Qiita)
-- http://kz-md.net/
-- http://blog.kz-md.net/
-</div>
-<div class="column2">
-![icon](pics/user.png)
-</div>
+<!-- <div class="column1"> -->
+<!-- - 前田 和寛 -->
+<!-- - 比治山大学短期大学部 -->
+<!-- - @kazutan   -->
+<!-- (Twitter, GitHub, Qiita) -->
+<!-- - http://kz-md.net/ -->
+<!-- - http://blog.kz-md.net/ -->
+<!-- </div> -->
+<!-- <div class="column2"> -->
+<!-- ![icon](pics/user.png) -->
+<!-- </div> -->
 
 ## 今回のお話
 
@@ -55,8 +55,8 @@ knitr::opts_chunk$set(echo = TRUE)
 - 必要知識が多めです
     - R, Rmdの知識とhtmlの知識は必須
     - Pandocの仕組みとテンプレートについての理解
-- ならなぜ取り上げた?
-    - ガイアが俺に囁いたから
+<!-- - ならなぜ取り上げた? -->
+<!--     - ガイアが俺に囁いたから -->
 
 # R Markdownがやっていること
 
